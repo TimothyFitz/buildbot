@@ -1,10 +1,38 @@
 from buildslave import runprocess
 from buildslave.test.util import command
+from buildslave.commands import base
 
 class SourceCommandTestMixin(command.CommandTestMixin):
     """
     Support for testing Source Commands; an extension of CommandTestMixin
     """
+
+    def setUpSourceCommand(self):
+        self.setUpCommand()
+
+        self.sourcedata = ''
+
+        self.testPaths = {}
+        def testPathExists(cmd, path):
+            if path not in self.testPaths:
+                raise AssertionError('no patch_testPath call for "%s"' % path)
+            return self.testPaths[path]
+        self.patch(base.SourceBaseCommand, 'testPathExists', testPathExists)
+
+        def testPathIsDir(cmd, path):
+            if path not in self.testPaths:
+                raise AssertionError('no patch_testPath call for "%s"' % path)
+            return self.testPaths[path] == 'dir'
+        self.patch(base.SourceBaseCommand, 'testPathIsDir', testPathIsDir)
+
+        def testPathIsFile(cmd, path):
+            if path not in self.testPaths:
+                raise AssertionError('no patch_testPath call for "%s"' % path)
+            return self.testPaths[path] == 'file'
+        self.patch(base.SourceBaseCommand, 'testPathIsFile', testPathIsFile)
+
+    def tearDownSourceCommand(self):
+        self.tearDownCommand()
 
     def make_command(self, cmdclass, args, makedirs=False):
         """
@@ -22,7 +50,6 @@ class SourceCommandTestMixin(command.CommandTestMixin):
         # note that these patches are to an *instance*, not a class, so there
         # is no need to use self.patch() to reverse them
 
-        self.sourcedata = ''
         def readSourcedata():
             return self.sourcedata
         cmd.readSourcedata = readSourcedata
@@ -60,3 +87,13 @@ class SourceCommandTestMixin(command.CommandTestMixin):
         """
         self.assertEqual(self.sourcedata, expected_sourcedata)
         return _
+
+    def set_sourcedata(self, sourcedata):
+        self.sourcedata = sourcedata
+
+    def set_path_status(self, path, answer):
+        """
+        Configure the testPathXxx methods to return appropriate answers
+        for a particular path.  ANSWER can be one of 'dir', 'file', or False
+        """
+        self.testPaths[path] = answer

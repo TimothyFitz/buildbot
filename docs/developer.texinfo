@@ -19,6 +19,7 @@ described here.
 * Subscription Interfaces::
 * Web Status::
 * Twisted Idioms::
+* Slave-Side Code::
 * Buildbot Tests::
 * Developer Class Index::
 @end menu
@@ -413,6 +414,20 @@ automatically start an dstop the function calls when the service is started and
 stopped.
 
 @end itemize
+
+@node Slave-Side Code
+@section Slave-Side Code
+
+A long-term Buildbot development goal is to @i{remove} logic from the slave and
+add it to the master.  In the interim, though, we have a significant amount of
+logic defined on the slave, particularly for Source steps.  This section
+details some of the patterns and tools used here.
+
+@enumerate
+@item runprocess
+@item Command
+@item SourceCommand
+@end enumerate
 
 @node Buildbot Tests
 @section Buildbot Tests

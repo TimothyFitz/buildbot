@@ -296,7 +296,7 @@ class SourceBaseCommand(Command):
         return True
 
     def sourcedirIsPatched(self):
-        return os.path.exists(os.path.join(self.builder.basedir,
+        return self.testPathExists(os.path.join(self.builder.basedir,
                                            self.workdir,
                                            ".buildbot-patched"))
 
@@ -532,3 +532,14 @@ class SourceBaseCommand(Command):
         d.addCallback(self._abandonOnFailure)
         return d
 
+    def testPathExists(self, path):
+        """like os.path.exists, but patchable for testing"""
+        return os.path.exists(path)
+
+    def testPathIsFile(self, path):
+        """like os.path.isfile, but patchable for testing"""
+        return os.path.isfile(path)
+
+    def testPathIsDir(self, path):
+        """like os.path.isdir, but patchable for testing"""
+        return os.path.isdir(path)

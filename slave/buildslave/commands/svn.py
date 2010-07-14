@@ -61,7 +61,7 @@ class SVN(SourceBaseCommand):
         return d
 
     def sourcedirIsUpdateable(self):
-        return os.path.isdir(os.path.join(self.builder.basedir,
+        return self.testPathIsDir(os.path.join(self.builder.basedir,
                                           self.srcdir, ".svn"))
 
     def doVCUpdate(self):
@@ -101,7 +101,7 @@ class SVN(SourceBaseCommand):
             filepath = os.path.join(self.builder.basedir, self.workdir,
                                     filename)
             self.sendStatus({'stdout': "%s\n" % filepath})
-            if os.path.isfile(filepath):
+            if self.testPathIsFile(filepath):
                 os.chmod(filepath, 0700)
                 os.remove(filepath)
             else:
