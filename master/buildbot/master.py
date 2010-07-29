@@ -316,11 +316,6 @@ class BotMaster(service.MultiService):
     def getPerspective(self, slavename):
         return self.slaves[slavename]
 
-    def shutdownSlaves(self):
-        # TODO: make this into a bot method rather than a builder method
-        for b in self.slaves.values():
-            b.shutdownSlave()
-
     def stopService(self):
         for b in self.builders.values():
             b.builder_status.addPointEvent(["master", "shutdown"])

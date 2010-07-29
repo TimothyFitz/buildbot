@@ -7,11 +7,12 @@ from twisted.spread import pb
 from twisted.application import service, internet
 from twisted.internet import defer
 
-from buildbot import interfaces, util
+from buildbot import interfaces, util, version
 from buildbot.status.progress import Expectations
 from buildbot.status.builder import RETRY
 from buildbot.process.properties import Properties
 from buildbot.util.eventual import eventually
+
 
 (ATTACHING, # slave attached, still checking hostinfo/etc
  IDLE, # idle, available for use
@@ -22,16 +23,10 @@ from buildbot.util.eventual import eventually
  ) = range(6)
 
 
-class AbstractSlaveBuilder(pb.Referenceable):
-    """I am the master-side representative for one of the
-    L{buildbot.slave.bot.SlaveBuilder} objects that lives in a remote
-    buildbot. When a remote builder connects, I query it for command versions
-    and then make it available to any Builds that are ready to run. """
-
+class AbstractSlaveBuilder(object):
     def __init__(self):
         self.ping_watchers = []
         self.state = None # set in subclass
-        self.remote = None
         self.slave = None
         self.builder_name = None
         self.locks = None
@@ -48,24 +43,12 @@ class AbstractSlaveBuilder(pb.Referenceable):
     def setBuilder(self, b):
         self.builder = b
         self.builder_name = b.name
-
+        
     def getSlaveCommandVersion(self, command, oldversion=None):
-        if self.remoteCommands is None:
-            # the slave is 0.5.0 or earlier
-            return oldversion
-        return self.remoteCommands.get(command)
+        return version
 
     def isAvailable(self):
-        # if this SlaveBuilder is busy, then it's definitely not available
-        if self.isBusy():
-            return False
-
-        # otherwise, check in with the BuildSlave
-        if self.slave:
-            return self.slave.canStartBuild()
-
-        # no slave? not very available.
-        return False
+        return not self.isBusy()
 
     def isBusy(self):
         return self.state not in (IDLE, LATENT)
@@ -77,6 +60,87 @@ class AbstractSlaveBuilder(pb.Referenceable):
         self.state = IDLE
         self.builder.triggerNewBuildCheck()
 
+    def prepare(self, builder_status):
+        if not self.slave.acquireLocks():
+            return defer.succeed(False)
+        return defer.succeed(True)
+
+    def ping(self, status=None):
+        """Ping the slave to make sure it is still there. Returns a Deferred
+        that fires with True if it is.
+
+        @param status: if you point this at a BuilderStatus, a 'pinging'
+                       event will be pushed.
+        """
+        oldstate = self.state
+        self.state = PINGING
+        newping = not self.ping_watchers
+        d = defer.Deferred()
+        self.ping_watchers.append(d)
+        if newping:
+            if status:
+                event = status.addEvent(["pinging"])
+                d2 = defer.Deferred()
+                d2.addCallback(self._pong_status, event)
+                self.ping_watchers.insert(0, d2)
+                # I think it will make the tests run smoother if the status
+                # is updated before the ping completes
+            self._ping().addCallback(self._pong)
+
+        def reset_state(res):
+            if self.state == PINGING:
+                self.state = oldstate
+            return res
+        d.addCallback(reset_state)
+        return d
+        
+    def _ping(self):
+        return defer.succeed()
+
+    def _pong(self, res):
+        watchers, self.ping_watchers = self.ping_watchers, []
+        for d in watchers:
+            d.callback(res)
+
+    def _pong_status(self, res, event):
+        if res:
+            event.text = ["ping", "success"]
+        else:
+            event.text = ["ping", "failed"]
+        event.finish()
+
+class AbstractRemoteSlaveBuilder(AbstractSlaveBuilder, pb.Referenceable):
+    """I am the master-side representative for one of the
+    L{buildbot.slave.bot.SlaveBuilder} objects that lives in a remote
+    buildbot. When a remote builder connects, I query it for command versions
+    and then make it available to any Builds that are ready to run. """
+    
+    def __init__(self):
+        AbstractSlaveBuilder.__init__(self)
+        self.remote = None
+
+    def getSlaveCommandVersion(self, command, oldversion=None):
+        if self.remoteCommands is None:
+            # the slave is 0.5.0 or earlier
+            return oldversion
+        return self.remoteCommands.get(command)
+
+    
+    def isAvailable(self):
+        # if this SlaveBuilder is busy, then it's definitely not available
+        if not AbstractSlaveBuilder.isAvailable(self):
+            return False
+
+        # otherwise, check in with the BuildSlave
+        if self.slave:
+            return self.slave.canStartBuild()
+
+        # no slave? not very available.
+        return False
+        
+    def _ping(self):
+        return Ping().ping(self.remote)
+    
     def attached(self, slave, remote, commands):
         """
         @type  slave: L{buildbot.buildslave.BuildSlave}
@@ -119,52 +183,6 @@ class AbstractSlaveBuilder(pb.Referenceable):
         log.msg(where)
         log.err(why)
         return why
-
-    def prepare(self, builder_status):
-        if not self.slave.acquireLocks():
-            return defer.succeed(False)
-        return defer.succeed(True)
-
-    def ping(self, status=None):
-        """Ping the slave to make sure it is still there. Returns a Deferred
-        that fires with True if it is.
-
-        @param status: if you point this at a BuilderStatus, a 'pinging'
-                       event will be pushed.
-        """
-        oldstate = self.state
-        self.state = PINGING
-        newping = not self.ping_watchers
-        d = defer.Deferred()
-        self.ping_watchers.append(d)
-        if newping:
-            if status:
-                event = status.addEvent(["pinging"])
-                d2 = defer.Deferred()
-                d2.addCallback(self._pong_status, event)
-                self.ping_watchers.insert(0, d2)
-                # I think it will make the tests run smoother if the status
-                # is updated before the ping completes
-            Ping().ping(self.remote).addCallback(self._pong)
-
-        def reset_state(res):
-            if self.state == PINGING:
-                self.state = oldstate
-            return res
-        d.addCallback(reset_state)
-        return d
-
-    def _pong(self, res):
-        watchers, self.ping_watchers = self.ping_watchers, []
-        for d in watchers:
-            d.callback(res)
-
-    def _pong_status(self, res, event):
-        if res:
-            event.text = ["ping", "success"]
-        else:
-            event.text = ["ping", "failed"]
-        event.finish()
 
     def detached(self):
         log.msg("Buildslave %s detached from %s" % (self.slave.slavename,
@@ -210,7 +228,7 @@ class Ping:
         self.d.callback(False)
 
 
-class SlaveBuilder(AbstractSlaveBuilder):
+class SlaveBuilder(AbstractRemoteSlaveBuilder):
 
     def __init__(self):
         AbstractSlaveBuilder.__init__(self)
@@ -233,9 +251,13 @@ class SlaveBuilder(AbstractSlaveBuilder):
             d.addCallback(lambda x: self.builder.triggerNewBuildCheck())
         else:
             self.builder.triggerNewBuildCheck()
+            
+class LocalSlaveBuilder(AbstractSlaveBuilder):
+    def __init__(self):
+        AbstractSlaveBuilder.__init__(self)
+        self.state = IDLE
 
-
-class LatentSlaveBuilder(AbstractSlaveBuilder):
+class LatentSlaveBuilder(AbstractRemoteSlaveBuilder):
     def __init__(self, slave, builder):
         AbstractSlaveBuilder.__init__(self)
         self.slave = slave
@@ -871,7 +893,7 @@ class Builder(pb.Referenceable, service.MultiService):
         # BUILDING (so we won't try to use it for any other builds). This
         # gets set back to IDLE by the Build itself when it finishes.
         sb.buildStarted()
-        d = sb.remote.callRemote("startBuild")
+        d = sb.startBuild()
         d.addCallbacks(self._startBuild_2, self._startBuildFailed,
                        callbackArgs=(build,sb), errbackArgs=(build,sb))
         return d
@@ -951,11 +973,6 @@ class Builder(pb.Referenceable, service.MultiService):
             self.expectations = Expectations(progress)
         log.msg("new expectations: %s seconds" % \
                 self.expectations.expectedBuildTime())
-
-    def shutdownSlave(self):
-        if self.remote:
-            self.remote.callRemote("shutdown")
-
 
 class BuilderControl:
     implements(interfaces.IBuilderControl)
